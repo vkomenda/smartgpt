@@ -1,15 +1,21 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
 use std::vec;
-use serde::{Serialize, Deserialize};
 use tokio::sync::Mutex;
 
-use crate::{LLM, Memory, MemoryProvider, RelevantMemory, MemorySystem, init_qdrant_client, create_collection_if_not_exists, convert_to_relevant_memory};
+use crate::{
+    convert_to_relevant_memory, create_collection_if_not_exists, init_qdrant_client, Memory,
+    MemoryProvider, MemorySystem, RelevantMemory, LLM,
+};
 
 use qdrant_client::prelude::*;
 use qdrant_client::qdrant::vectors::VectorsOptions;
-use qdrant_client::qdrant::{SearchPoints, PointId, Vectors, Vector, WithPayloadSelector, with_payload_selector, RecommendPoints};
+use qdrant_client::qdrant::{
+    with_payload_selector, PointId, RecommendPoints, SearchPoints, Vector, Vectors,
+    WithPayloadSelector,
+};
 use tokio::runtime::Runtime;
 
 use async_trait::async_trait;
@@ -18,12 +24,16 @@ use async_trait::async_trait;
 pub struct QdrantPayload {
     pub content: String,
     pub recall: f32,
-    pub recency: f32
+    pub recency: f32,
 }
 
 impl QdrantPayload {
     pub fn new(content: String, recall: f32, recency: f32) -> Self {
-        Self { content, recall, recency }
+        Self {
+            content,
+            recall,
+            recency,
+        }
     }
 
     pub fn to_memory_map(&self) -> Result<HashMap<String, Value>, serde_json::Error> {
@@ -38,7 +48,7 @@ impl QdrantPayload {
 pub struct QdrantMemorySystem {
     client: QdrantClient,
     latest_point_id: Arc<Mutex<Option<u64>>>,
-    collection_name: String
+    collection_name: String,
 }
 
 #[async_trait]
@@ -56,7 +66,7 @@ impl MemorySystem for QdrantMemorySystem {
         let payload = QdrantPayload::new(
             memory_struct.content.clone(),
             memory_struct.recency,
-            memory_struct.recall
+            memory_struct.recall,
         );
 
         let mut latest_point_id = self.latest_point_id.lock().await;
@@ -69,24 +79,26 @@ impl MemorySystem for QdrantMemorySystem {
         let point_id = PointId {
             point_id_options: Some(point_id::PointIdOptions::Num(point_id_val)),
         };
-        
+
         let vectors = Vectors {
             vectors_options: Some(VectorsOptions::Vector(Vector {
                 data: embedding.clone(),
+                indices: None,
             })),
         };
 
         self.client
-        .upsert_points(
-            self.collection_name.to_string(),
-            vec![PointStruct {
-                id: Some(point_id),
-                payload: payload.to_memory_map()?,
-                vectors: Some(vectors)
-            }],
-            None,
-        )
-        .await?;
+            .upsert_points(
+                self.collection_name.to_string(),
+                None,
+                vec![PointStruct {
+                    id: Some(point_id),
+                    payload: payload.to_memory_map()?,
+                    vectors: Some(vectors),
+                }],
+                None,
+            )
+            .await?;
 
         Ok(())
     }
@@ -123,7 +135,12 @@ impl MemorySystem for QdrantMemorySystem {
                 negative: vec![],
                 filter: None,
                 using: None,
-                lookup_from: None
+                lookup_from: None,
+                strategy: None,
+                negative_vectors: vec![],
+                positive_vectors: vec![],
+                timeout: None,
+                shard_key_selector: None,
             };
 
             let recommend_response = self.client.recommend(&recommend_request).await?;
@@ -142,7 +159,10 @@ impl MemorySystem for QdrantMemorySystem {
                 offset: None,
                 vector_name: None,
                 with_vectors: None,
-                read_consistency: None
+                read_consistency: None,
+                timeout: None,
+                shard_key_selector: None,
+                sparse_indices: None,
             };
 
             let search_response = self.client.search_points(&search_request).await?;
@@ -154,10 +174,7 @@ impl MemorySystem for QdrantMemorySystem {
             .map(|point| convert_to_relevant_memory(point))
             .collect();
 
-        match relevant_memories_result {
-            Ok(relevant_memories) => Ok(relevant_memories),
-            Err(e) => Err(e),
-        }
+        relevant_memories_result
     }
 
     async fn decay_recency(&mut self, _decay_factor: f32) -> Result<(), Box<dyn Error>> {
@@ -171,7 +188,7 @@ pub struct QdrantProvider;
 
 #[derive(Serialize, Deserialize)]
 pub struct QdrantMemoryConfig {
-    pub collection: String
+    pub collection: String,
 }
 
 impl MemoryProvider for QdrantProvider {
@@ -185,21 +202,17 @@ impl MemoryProvider for QdrantProvider {
 
     fn create(&self, config: serde_json::Value) -> Result<Box<dyn MemorySystem>, Box<dyn Error>> {
         let rt = Runtime::new().expect("Failed to create Tokio runtime");
-        let client = rt.block_on(async {
-            init_qdrant_client().await
-        })?;
+        let client = rt.block_on(async { init_qdrant_client().await })?;
 
         let qdrant_config: QdrantMemoryConfig = serde_json::from_value(config)?;
         let collection_name = qdrant_config.collection;
 
-        rt.block_on(async {
-            create_collection_if_not_exists(&client, &collection_name).await
-        })?;
+        rt.block_on(async { create_collection_if_not_exists(&client, &collection_name).await })?;
 
-        Ok(Box::new(QdrantMemorySystem { 
+        Ok(Box::new(QdrantMemorySystem {
             client,
             latest_point_id: Arc::new(Mutex::new(Some(0))),
-            collection_name: collection_name.to_string()
+            collection_name: collection_name.to_string(),
         }))
     }
 }
