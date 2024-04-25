@@ -43,6 +43,8 @@ plugins:
         app id: PUT YOUR APP ID HERE
     newsapi:
         api key: PUT YOUR KEY HERE
+    alphavantage:
+        api key: PUT YOUR KEY HERE
     brainstorm: {}
     #file system: {}
 disabled tools: []
