@@ -35,14 +35,9 @@ impl PluginData for BrowseData {
         match name {
             "browse" => {
                 let BrowseRequest { url, params } = serde_json::from_value(value)?;
-                dbg!(&url, &params);
                 let res_result = self.client.get(url).query(&params).send().await?;
-                dbg!(&res_result);
                 let text = res_result.text().await?;
-                dbg!(&text);
-
                 let json = serde_json::from_str(&text);
-                dbg!(&json);
 
                 Ok(json?)
             }

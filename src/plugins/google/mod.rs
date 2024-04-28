@@ -35,11 +35,9 @@ pub async fn google(ctx: &mut CommandContext, args: ScriptValue) -> Result<Strin
 
     let api_key: String = serde_json::from_value(invoke(wolfram_info, "get api key", true).await?)?;
     let api_key: &str = &api_key;
-    dbg!(&api_key);
 
     let cse_id: String = serde_json::from_value(invoke(wolfram_info, "get cse id", true).await?)?;
     let cse_id: &str = &cse_id;
-    dbg!(&cse_id);
 
     let params = [
         ("key", api_key),

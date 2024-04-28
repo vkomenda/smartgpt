@@ -93,8 +93,6 @@ pub async fn ask_alphavantage(
         .await?,
     )?;
 
-    dbg!(&json);
-
     // let resp = match req {
     //     AlphaVantageRequest::GlobalQuote(_) => {
     //         let json: GlobalQuote = serde_json::from_str(&json)?;
@@ -142,7 +140,6 @@ impl CommandImpl for AlphaVantageImpl {
         ctx: &mut CommandContext,
         args: ScriptValue,
     ) -> Result<CommandResult, Box<dyn Error>> {
-        dbg!(&args);
         alphavantage(ctx, args).await
     }
 
