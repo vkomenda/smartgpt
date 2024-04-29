@@ -111,7 +111,7 @@ pub struct NewsData {
 
 #[async_trait]
 impl PluginData for NewsData {
-    async fn apply(&mut self, name: &str, _value: Value) -> Result<Value, Box<dyn Error>> {
+    async fn apply(&mut self, name: &str) -> Result<Value, Box<dyn Error>> {
         match name {
             "get api key" => Ok(self.api_key.clone().into()),
             _ => Err(Box::new(PluginDataNoInvoke(

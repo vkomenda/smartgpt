@@ -1,18 +1,19 @@
+use async_trait::async_trait;
+use serde_json::Value;
 use std::{
-    any::Any,
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     error::Error,
     fmt::{Debug, Display},
 };
 
-use async_trait::async_trait;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use serde_json::Value;
+use crate::plugins::http_client::HttpClientMethod;
+use crate::{error::OpaqueError, http_client::HttpClientState};
+use crate::{MemorySystem, ScriptValue, LLM};
 
 #[derive(Debug, Clone)]
-pub struct PluginDataNoInvoke(pub String, pub String);
+pub struct ToolStateNoInvoke(pub String, pub String);
 
-impl<'a> Display for PluginDataNoInvoke {
+impl<'a> Display for ToolStateNoInvoke {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -22,7 +23,7 @@ impl<'a> Display for PluginDataNoInvoke {
     }
 }
 
-impl<'a> Error for PluginDataNoInvoke {}
+impl<'a> Error for ToolStateNoInvoke {}
 
 #[derive(Debug, Clone)]
 pub struct CommandNoArgError<'a>(pub &'a str, pub &'a str);
@@ -39,18 +40,61 @@ impl<'a> Display for CommandNoArgError<'a> {
 
 impl<'a> Error for CommandNoArgError<'a> {}
 
-use crate::{AutoType, MemorySystem, ScriptValue, LLM};
-
-#[async_trait]
-pub trait PluginData: Any + Send + Sync {
-    async fn apply(&mut self, name: &str, info: Value) -> Result<Value, Box<dyn Error>>;
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub enum StatefulTool {
+    HttpClient,
+    Google,
+    NewsApi,
+    Wolfram,
+    AlphaVantage,
 }
 
-pub struct PluginStore(pub HashMap<String, Box<dyn PluginData>>);
+#[async_trait]
+pub trait ToolState: Send + Sync {
+    type Method;
 
-impl PluginStore {
+    async fn call_method(
+        &mut self,
+        method: Self::Method,
+        args: Value,
+    ) -> Result<Value, OpaqueError>;
+}
+
+pub enum ToolMethod {
+    HttpClientMethod(HttpClientMethod),
+    GoogleMethod(GoogleMethod),
+}
+
+pub struct ToolStateStore(pub BTreeMap<StatefulTool, Box<dyn ToolState>>);
+
+impl ToolStateStore {
     pub fn new() -> Self {
-        Self(HashMap::new())
+        Self(Default::default())
+    }
+
+    pub fn call_method(&mut self, method: ToolMethod, args: Value) -> Result<Value, OpaqueError> {
+        match method {
+            ToolMethod::HttpClientMethod(http_client_method) => {
+                let tool_state: HttpClientState = self.get_state(Tool::HttpClient);
+                tool_state.call_method(http_client_method, args)
+            }
+
+            ToolMethod::GoogleMethod(google_method) => {
+                let tool_state: GooleState = self.get_state(Tool::Google);
+                tool_state.call_method(google_method, args)
+            } //
+              // TODO
+              //
+        }
+    }
+
+    pub fn get_state(
+        &mut self,
+        module: StatefulTool,
+    ) -> Result<&mut Box<dyn ToolState>, OpaqueError> {
+        self.0
+            .get_mut(&module)
+            .ok_or(Box::new(NoToolStateError(module)))
     }
 }
 
@@ -92,39 +136,26 @@ impl Agents {
 }
 
 pub struct CommandContext {
-    pub plugin_data: PluginStore,
+    pub module_state_store: ToolStateStore,
     pub agents: Agents,
-    pub plugins: Vec<Plugin>,
+    pub plugins: Vec<Tool>,
     pub disabled_tools: Vec<String>,
     pub assets: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
-pub struct NoPluginDataError(pub String);
+pub struct NoToolStateError(pub StatefulTool);
 
-impl Display for NoPluginDataError {
+impl Display for NoToolStateError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "could not find plugin data for plugin \"{}\"", self.0)
     }
 }
 
-impl Error for NoPluginDataError {}
+impl Error for NoToolStateError {}
 
-impl PluginStore {
-    pub fn get_data(&mut self, plugin: &str) -> Result<&mut Box<dyn PluginData>, Box<dyn Error>> {
-        let plugin = plugin.to_string();
-        let error = NoPluginDataError(plugin.clone());
-        self.0.get_mut(&plugin).ok_or(Box::new(error))
-    }
-}
-
-pub async fn invoke(
-    data: &mut Box<dyn PluginData>,
-    name: &str,
-    info: impl Serialize,
-) -> Result<Value, Box<dyn Error>> {
-    let info = serde_json::to_value(info)?;
-    let value = data.apply(name, info).await?;
+pub async fn invoke(data: &mut Box<dyn ModuleState>, method: M) -> Result<O, Box<dyn Error>> {
+    let value = data.apply(name).await?;
     Ok(value)
 }
 
@@ -145,19 +176,19 @@ pub trait CommandImpl: Send + Sync {
 }
 
 #[async_trait]
-pub trait PluginCycle: Send + Sync {
+pub trait ToolCycle: Send + Sync {
     async fn create_context(
         &self,
         context: &mut CommandContext,
         previous_prompt: Option<&str>,
     ) -> Result<Option<String>, Box<dyn Error>>;
-    fn create_data(&self, value: Value) -> Option<Box<dyn PluginData>>;
+    fn create_data(&self, value: Value) -> Option<Box<dyn ToolState>>;
 }
 
 pub struct EmptyCycle;
 
 #[async_trait]
-impl PluginCycle for EmptyCycle {
+impl ToolCycle for EmptyCycle {
     async fn create_context(
         &self,
         _context: &mut CommandContext,
@@ -166,18 +197,18 @@ impl PluginCycle for EmptyCycle {
         Ok(None)
     }
 
-    fn create_data(&self, _: Value) -> Option<Box<dyn PluginData>> {
+    fn create_data(&self, _: Value) -> Option<Box<dyn ToolState>> {
         None
     }
 }
 
 #[derive(Clone)]
-pub struct ToolArgument {
+pub struct ToolFeatureArgument {
     pub name: String,
     pub example: String,
 }
 
-impl ToolArgument {
+impl ToolFeatureArgument {
     pub fn new(name: &str, example: &str) -> Self {
         Self {
             name: name.to_string(),
@@ -186,46 +217,35 @@ impl ToolArgument {
     }
 }
 
-#[derive(Clone, Eq, PartialEq)]
-pub enum ToolType {
+#[derive(Copy, Clone, Eq, PartialEq)]
+pub enum ToolFeatureType {
     Resource,
     Action { needs_permission: bool },
 }
 
-pub struct Tool {
+pub struct ToolFeature {
     pub name: String,
     pub purpose: String,
     pub args: Vec<ToolArgument>,
-    pub tool_type: ToolType,
+    pub feature_type: ToolFeatureType,
     pub run: Box<dyn CommandImpl>,
 }
 
-impl Tool {
+impl ToolFeature {
     pub fn box_clone(&self) -> Self {
         Self {
             name: self.name.clone(),
             purpose: self.purpose.clone(),
             args: self.args.clone(),
-            tool_type: self.tool_type.clone(),
-            run: self.run.box_clone(),
+            feature_type: self.feature_type,
+            run: Box::new(self.run),
         }
     }
 }
 
-pub struct Plugin {
-    pub name: String,
-    pub cycle: Box<dyn PluginCycle>,
-    pub dependencies: Vec<String>,
-    pub tools: Vec<Tool>,
+pub struct Tool {
+    pub id: StatefulTool,
+    pub cycle: Box<dyn ToolCycle>,
+    pub dependencies: Vec<StatefulTool>,
+    pub features: Vec<ToolFeature>,
 }
-
-#[derive(Debug, Clone)]
-pub struct NotFoundError(pub String);
-
-impl Display for NotFoundError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "NotFoundError: {}", self.0)
-    }
-}
-
-impl Error for NotFoundError {}

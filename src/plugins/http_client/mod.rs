@@ -6,7 +6,6 @@ use reqwest::{
     Client,
 };
 use std::{error::Error, fmt::Display};
-use textwrap::wrap;
 
 mod extract;
 
@@ -15,11 +14,17 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    CommandContext, CommandImpl, CommandResult, Message, Plugin, PluginCycle, PluginData,
-    PluginDataNoInvoke, ScriptValue, Tool, ToolArgument, ToolType, LLM,
+    error::OpaqueError, CommandContext, CommandImpl, CommandResult, Message, ScriptValue,
+    StatefulTool, Tool, ToolCycle, ToolData, ToolFeature, ToolFeatureArgument, ToolFeatureType,
+    ToolState, ToolStateNoInvoke, LLM,
 };
 
-pub struct BrowseData {
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum HttpClientMethod {
+    Get,
+}
+
+pub struct HttpClientState {
     pub client: Client,
 }
 
@@ -30,21 +35,20 @@ pub struct BrowseRequest {
 }
 
 #[async_trait]
-impl PluginData for BrowseData {
-    async fn apply(&mut self, name: &str, value: Value) -> Result<Value, Box<dyn Error>> {
-        match name {
-            "browse" => {
+impl ToolState for HttpClientState {
+    type Method = HttpClientMethod;
+
+    async fn call_method(
+        &mut self,
+        method: Self::Method,
+        value: Value,
+    ) -> Result<Value, OpaqueError> {
+        match method {
+            Self::Method::Get => {
                 let BrowseRequest { url, params } = serde_json::from_value(value)?;
                 let res_result = self.client.get(url).query(&params).send().await?;
-                let text = res_result.text().await?;
-                let json = serde_json::from_str(&text);
-
-                Ok(json?)
+                Ok(res_result.json().await?)
             }
-            _ => Err(Box::new(PluginDataNoInvoke(
-                "Browse".to_string(),
-                name.to_string(),
-            ))),
         }
     }
 }
@@ -208,12 +212,12 @@ pub fn create_browse() -> Plugin {
         name: "Browse".to_string(),
         dependencies: vec![],
         cycle: Box::new(BrowseCycle),
-        tools: vec![Tool {
+        tools: vec![ToolFeature {
             name: "browse_urls".to_string(),
             purpose: "Read the text content from a URL.".to_string(),
-            args: vec![ToolArgument::new("urls", r#"[ "url 1", "url 2" ]"#)],
+            args: vec![ToolFeatureArgument::new("urls", r#"[ "url 1", "url 2" ]"#)],
             run: Box::new(BrowseURLs),
-            tool_type: ToolType::Resource,
+            feature_type: ToolFeatureType::Resource,
         }],
     }
 }

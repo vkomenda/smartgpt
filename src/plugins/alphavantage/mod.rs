@@ -45,7 +45,7 @@ pub struct AlphaVantageData {
 #[async_trait]
 impl PluginData for AlphaVantageData {
     // TODO: refactor name into enum types perhaps
-    async fn apply(&mut self, _name: &str, info: Value) -> Result<Value, Box<dyn Error>> {
+    async fn apply(&mut self, _name: &str) -> Result<Value, Box<dyn Error>> {
         Ok(self.api_key.clone().into())
     }
 }

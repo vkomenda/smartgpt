@@ -104,7 +104,7 @@ pub struct GoogleData {
 
 #[async_trait]
 impl PluginData for GoogleData {
-    async fn apply(&mut self, name: &str, _: Value) -> Result<Value, Box<dyn Error>> {
+    async fn apply(&mut self, name: &str) -> Result<Value, Box<dyn Error>> {
         match name {
             "get api key" => Ok(self.api_key.clone().into()),
             "get cse id" => Ok(self.cse_id.clone().into()),

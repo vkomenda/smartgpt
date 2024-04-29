@@ -117,7 +117,7 @@ pub struct WolframData {
 
 #[async_trait]
 impl PluginData for WolframData {
-    async fn apply(&mut self, name: &str, _value: Value) -> Result<Value, Box<dyn Error>> {
+    async fn apply(&mut self, name: &str) -> Result<Value, Box<dyn Error>> {
         match name {
             "get app id" => Ok(self.app_id.clone().into()),
             _ => Err(Box::new(PluginDataNoInvoke(
